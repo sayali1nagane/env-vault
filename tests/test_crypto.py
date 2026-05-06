@@ -20,6 +20,13 @@ def test_generate_key_returns_bytes():
     assert len(key) == 44  # Base64-encoded 32-byte Fernet key
 
 
+def test_generate_key_is_unique():
+    """Each call to generate_key should produce a different key."""
+    key1 = generate_key()
+    key2 = generate_key()
+    assert key1 != key2
+
+
 def test_derive_key_from_passphrase_deterministic():
     salt = b"testsalt12345678"
     key1 = derive_key_from_passphrase("mysecret", salt)
@@ -31,6 +38,13 @@ def test_derive_key_different_passphrases():
     salt = b"testsalt12345678"
     key1 = derive_key_from_passphrase("secret1", salt)
     key2 = derive_key_from_passphrase("secret2", salt)
+    assert key1 != key2
+
+
+def test_derive_key_different_salts():
+    """The same passphrase with different salts should produce different keys."""
+    key1 = derive_key_from_passphrase("mysecret", b"salt1salt1salt1a")
+    key2 = derive_key_from_passphrase("mysecret", b"salt2salt2salt2b")
     assert key1 != key2
 
 
