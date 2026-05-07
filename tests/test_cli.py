@@ -96,4 +96,4 @@ def test_diff_no_changes(runner, vault_env, tmp_path):
 
     result = runner.invoke(cli, ["diff", str(local_env), "--base", str(base_path)])
     assert result.exit_code == 0
-    assert "No differences" in result.output
+    assert "No changes" in result.output
