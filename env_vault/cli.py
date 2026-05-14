@@ -1,118 +1,110 @@
-"""Command-line interface for env-vault."""
+"""Main CLI entry-point for env-vault."""
 
-import sys
-import click
+from __future__ import annotations
+
 from pathlib import Path
+
+import click
 
 from env_vault.crypto import generate_key, save_key, load_key, encrypt, decrypt
 from env_vault.storage import (
     get_vault_dir,
+    get_vault_path,
+    get_meta_path,
     init_vault_dir,
     write_vault,
     read_vault,
-    write_meta,
-    read_meta,
 )
 from env_vault.parser import parse_env_string, serialize_env_dict, diff_env_dicts
+from env_vault.cli_export import export_group
+from env_vault.cli_audit import audit_group
+from env_vault.cli_rotate import rotate_group
+from env_vault.cli_profile import profile_group
+from env_vault.cli_snapshot import snapshot_group
+from env_vault.cli_tags import tags_group
+from env_vault.cli_compare import compare_group
+from env_vault.cli_lint import lint_group
+from env_vault.cli_template import template_group
+from env_vault.cli_history import history_group
+from env_vault.cli_remind import remind_group
 
 
 @click.group()
-def cli():
-    """env-vault: encrypt and manage project-level .env files."""
-    pass
+def cli() -> None:
+    """env-vault: encrypted .env file manager."""
 
 
-@cli.command()
-@click.option("--base", default=".", help="Base directory for the vault.", show_default=True)
-def init(base):
-    """Initialize a new env-vault in the current project."""
-    base_path = Path(base).resolve()
-    vault_dir = get_vault_dir(base_path)
+cli.add_command(export_group, "export")
+cli.add_command(audit_group, "audit")
+cli.add_command(rotate_group, "rotate")
+cli.add_command(profile_group, "profile")
+cli.add_command(snapshot_group, "snapshot")
+cli.add_command(tags_group, "tags")
+cli.add_command(compare_group, "compare")
+cli.add_command(lint_group, "lint")
+cli.add_command(template_group, "template")
+cli.add_command(history_group, "history")
+cli.add_command(remind_group, "remind")
 
+
+@cli.command("init")
+@click.option("--base-path", default=".", show_default=True)
+def init(base_path: str) -> None:
+    """Initialise a new vault in the current project."""
+    base = Path(base_path)
+    vault_dir = get_vault_dir(base)
     if vault_dir.exists():
-        click.echo(f"Vault already initialized at {vault_dir}")
-        sys.exit(1)
-
-    init_vault_dir(base_path)
+        raise click.ClickException("Vault already initialised.")
+    init_vault_dir(base)
     key = generate_key()
-    save_key(key, base_path)
-    write_meta({"version": 1, "entries": []}, base_path)
-    click.echo(f"Vault initialized at {vault_dir}")
-    click.echo("Key saved locally. Do NOT commit the .env-vault/key file.")
+    save_key(key, base)
+    click.echo(f"Vault initialised at {vault_dir}")
 
 
-@cli.command(name="set")
-@click.argument("env_file", default=".env")
-@click.option("--base", default=".", help="Base directory for the vault.", show_default=True)
-def set_cmd(env_file, base):
-    """Encrypt and store an .env file into the vault."""
-    base_path = Path(base).resolve()
-    env_path = Path(env_file).resolve()
-
-    if not env_path.exists():
-        click.echo(f"File not found: {env_path}")
-        sys.exit(1)
-
-    key = load_key(base_path)
-    plaintext = env_path.read_bytes()
+@cli.command("set")
+@click.argument("env_file", type=click.Path(exists=True))
+@click.option("--base-path", default=".", show_default=True)
+@click.option("--profile", default="default", show_default=True)
+def set_cmd(env_file: str, base_path: str, profile: str) -> None:
+    """Encrypt and store an .env file in the vault."""
+    base = Path(base_path)
+    key = load_key(base)
+    plaintext = Path(env_file).read_bytes()
     ciphertext = encrypt(key, plaintext)
-    write_vault(ciphertext, base_path)
-
-    meta = read_meta(base_path) or {"version": 1, "entries": []}
-    if str(env_path) not in meta["entries"]:
-        meta["entries"].append(str(env_path))
-    write_meta(meta, base_path)
-
-    click.echo(f"Encrypted {env_path} -> vault")
+    write_vault(ciphertext, base, profile)
+    click.echo(f"Encrypted '{env_file}' into profile '{profile}'.")
 
 
-@cli.command(name="get")
-@click.argument("output_file", default=".env")
-@click.option("--base", default=".", help="Base directory for the vault.", show_default=True)
-def get_cmd(output_file, base):
-    """Decrypt and restore the .env file from the vault."""
-    base_path = Path(base).resolve()
-    output_path = Path(output_file).resolve()
+@cli.command("get")
+@click.argument("key_name")
+@click.option("--base-path", default=".", show_default=True)
+@click.option("--profile", default="default", show_default=True)
+def get_cmd(key_name: str, base_path: str, profile: str) -> None:
+    """Retrieve a single value from the vault."""
+    base = Path(base_path)
+    key = load_key(base)
+    ciphertext = read_vault(base, profile)
+    plaintext = decrypt(key, ciphertext).decode()
+    env = parse_env_string(plaintext)
+    if key_name not in env:
+        raise click.ClickException(f"Key '{key_name}' not found in profile '{profile}'.")
+    click.echo(env[key_name])
 
-    key = load_key(base_path)
-    ciphertext = read_vault(base_path)
-    plaintext = decrypt(key, ciphertext)
-    output_path.write_bytes(plaintext)
-    click.echo(f"Decrypted vault -> {output_path}")
 
-
-@cli.command()
-@click.argument("env_file", default=".env")
-@click.option("--base", default=".", help="Base directory for the vault.", show_default=True)
-def diff(env_file, base):
-    """Show diff between local .env and the encrypted vault contents."""
-    base_path = Path(base).resolve()
-    env_path = Path(env_file).resolve()
-
-    if not env_path.exists():
-        click.echo(f"File not found: {env_path}")
-        sys.exit(1)
-
-    key = load_key(base_path)
-    ciphertext = read_vault(base_path)
-    vault_plaintext = decrypt(key, ciphertext).decode()
-    local_plaintext = env_path.read_text()
-
-    vault_env = parse_env_string(vault_plaintext)
-    local_env = parse_env_string(local_plaintext)
-    added, removed, changed = diff_env_dicts(vault_env, local_env)
-
-    if not added and not removed and not changed:
+@cli.command("diff")
+@click.argument("env_file", type=click.Path(exists=True))
+@click.option("--base-path", default=".", show_default=True)
+@click.option("--profile", default="default", show_default=True)
+def diff(env_file: str, base_path: str, profile: str) -> None:
+    """Show diff between a local .env file and the stored vault."""
+    base = Path(base_path)
+    key = load_key(base)
+    ciphertext = read_vault(base, profile)
+    stored = parse_env_string(decrypt(key, ciphertext).decode())
+    local = parse_env_string(Path(env_file).read_text())
+    changes = diff_env_dicts(stored, local)
+    if not changes:
         click.echo("No differences found.")
         return
-
-    for key_name in added:
-        click.echo(click.style(f"+ {key_name}={local_env[key_name]}", fg="green"))
-    for key_name in removed:
-        click.echo(click.style(f"- {key_name}={vault_env[key_name]}", fg="red"))
-    for key_name in changed:
-        click.echo(click.style(f"~ {key_name}: {vault_env[key_name]} -> {local_env[key_name]}", fg="yellow"))
-
-
-if __name__ == "__main__":
-    cli()
+    for change in changes:
+        click.echo(change)
