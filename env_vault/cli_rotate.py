@@ -52,9 +52,18 @@ def rotate_cmd(project: str, base_path: str):
 def info_cmd(project: str, base_path: str):
     """Show last key rotation info for PROJECT."""
     base = Path(base_path)
-    info = get_rotation_info(project, base)
+    try:
+        info = get_rotation_info(project, base)
+    except FileNotFoundError as exc:
+        click.echo(click.style(str(exc), fg="red"), err=True)
+        raise SystemExit(1)
+
     last = info.get("last_rotated")
+    rotation_count = info.get("rotation_count")
+
     if last:
         click.echo(f"Last rotated: {last}")
+        if rotation_count is not None:
+            click.echo(f"Total rotations: {rotation_count}")
     else:
         click.echo("No rotation recorded for this project.")
